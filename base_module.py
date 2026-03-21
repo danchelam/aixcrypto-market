@@ -28,7 +28,7 @@ from playwright.async_api import (
     async_playwright, Browser, BrowserContext, Page, Playwright,
 )
 
-__version__ = "2026.03.22.3"
+__version__ = "2026.03.22.4"
 
 # ════════════════════════════════════════════════════════════
 #  全局配置（可在调用 run_batch 时覆盖）
@@ -437,6 +437,7 @@ async def unlock_okx_wallet(
     account_id: str,
     password: str = OKX_DEFAULT_PASSWORD,
     extension_id: str = OKX_EXTENSION_ID,
+    target_url: str = "",
 ) -> bool:
     """
     解锁 OKX 钱包。
@@ -446,6 +447,8 @@ async def unlock_okx_wallet(
     2. 若锁定/未知 → 用 personal_sign 触发弹窗（需要私钥，锁定必弹密码框）
        eth_accounts / eth_requestAccounts 返回缓存数据，不可靠
     3. 弹窗中填写密码 → 点击解锁 → 关闭残留签名弹窗
+
+    target_url: 优先导航到此 URL 来激活钱包（通常是业务 dApp 地址）
     """
     # 从 context.pages 中找到真正的网页（跳过扩展 offscreen 页面）
     page = None
@@ -460,8 +463,7 @@ async def unlock_okx_wallet(
     if not page:
         page = await context.new_page()
 
-    # ── 1. 导航到外部网页（扩展不在 adspower 内部页面注入内容脚本）──
-    # 先检查当前页是否已有 provider（比如已经在 dApp 上）
+    # ── 1. 导航到目标网页以激活钱包内容脚本 ──
     has_provider = False
     try:
         has_provider = await page.evaluate(
@@ -471,17 +473,21 @@ async def unlock_okx_wallet(
         pass
 
     if not has_provider:
-        log(account_id, "导航到外部网页以激活钱包内容脚本...")
+        urls = [target_url] if target_url else []
+        urls.extend(["https://example.com", "https://www.google.com", "https://www.baidu.com"])
         navigated = False
-        for url in ("https://example.com", "https://www.google.com", "https://www.baidu.com"):
+        for url in urls:
+            if not url:
+                continue
             try:
+                log(account_id, f"导航到 {url[:40]}...")
                 await page.goto(url, wait_until="domcontentloaded", timeout=15000)
                 navigated = True
                 break
             except Exception:
                 continue
         if not navigated:
-            log(account_id, "无法导航到任何外部网页")
+            log(account_id, "无法导航到任何网页")
             return False
         await asyncio.sleep(3)
 
@@ -941,7 +947,8 @@ async def run_single_account(
 
         # 解锁钱包（期间禁用弹窗处理器避免冲突）
         handler.enabled = False
-        unlock_ok = await unlock_okx_wallet(context, aid)
+        unlock_target_url = task_kwargs.pop("unlock_target_url", "")
+        unlock_ok = await unlock_okx_wallet(context, aid, target_url=unlock_target_url)
         handler.enabled = True
 
         if not unlock_ok:

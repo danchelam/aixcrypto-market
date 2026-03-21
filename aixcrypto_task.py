@@ -7,7 +7,7 @@ AixCrypto Prediction Market 自动化任务 (Playwright 版本 2.0)
   3. Claim Rewards
 """
 
-__version__ = "2026.03.22.3"
+__version__ = "2026.03.22.4"
 
 import asyncio
 import random
@@ -531,6 +531,7 @@ def main():
             aixcrypto_task,
             max_workers=1,
             api_key=ADSPOWER_API_KEY,
+            unlock_target_url=HOME_URL,
         ))
 
     elif mode == "2":
@@ -544,6 +545,7 @@ def main():
             aixcrypto_task,
             max_workers=workers,
             api_key=ADSPOWER_API_KEY,
+            unlock_target_url=HOME_URL,
         ))
     else:
         print("无效输入。")
