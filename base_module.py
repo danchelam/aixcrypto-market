@@ -28,7 +28,7 @@ from playwright.async_api import (
     async_playwright, Browser, BrowserContext, Page, Playwright,
 )
 
-__version__ = "2026.03.22.8"
+__version__ = "2026.03.22.9"
 
 # ════════════════════════════════════════════════════════════
 #  全局配置（可在调用 run_batch 时覆盖）
@@ -956,9 +956,7 @@ async def run_single_account(
         handler.enabled = True
 
         if not unlock_ok:
-            log(aid, "★ 钱包解锁失败，停止执行。浏览器保持打开，请手动检查。")
-            log(aid, "★ 检查完毕后按 Ctrl+C 退出脚本，然后在 AdsPower 中手动关闭窗口。")
-            browser = None  # 阻止 finally 关闭浏览器
+            log(aid, "钱包解锁失败，关闭窗口。")
             return
 
         log(aid, "钱包解锁成功")
