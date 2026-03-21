@@ -7,7 +7,7 @@ AixCrypto Prediction Market 自动化任务 (Playwright 版本 2.0)
   3. Claim Rewards
 """
 
-__version__ = "2026.03.22.10"
+__version__ = "2026.03.22.11"
 
 import asyncio
 import random
@@ -24,6 +24,7 @@ from base_module import (
     _click_wallet_button,
     _find_and_fill_password,
     _click_unlock_button,
+    OKX_DEFAULT_PASSWORD,
     load_accounts,
     run_batch,
     log,
@@ -102,7 +103,7 @@ async def _handle_wallet_popup(popup: Page, context: BrowserContext, account_id:
         pass
     await asyncio.sleep(1.5)
 
-    found_pwd = await _find_and_fill_password(popup, context, account_id)
+    found_pwd = await _find_and_fill_password(popup, context, account_id, OKX_DEFAULT_PASSWORD)
     if found_pwd:
         log(account_id, "钱包已锁定，正在解锁...")
         await asyncio.sleep(0.5)

@@ -9,7 +9,7 @@ AixCrypto 自动化 — 启动器 + Web 控制台
   5. aixcrypto_runner.py 自身热更新后自动重启
 """
 
-__version__ = "2026.03.22.10"
+__version__ = "2026.03.22.11"
 
 from flask import Flask, render_template
 from flask_socketio import SocketIO, emit
