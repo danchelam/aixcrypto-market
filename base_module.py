@@ -28,7 +28,7 @@ from playwright.async_api import (
     async_playwright, Browser, BrowserContext, Page, Playwright,
 )
 
-__version__ = "2026.03.22.12"
+__version__ = "2026.03.22.13"
 
 # ════════════════════════════════════════════════════════════
 #  全局配置（可在调用 run_batch 时覆盖）
@@ -700,16 +700,16 @@ WALLET_BUTTON_KEYWORDS = [
 
 
 async def _click_wallet_button(
-    page: Page, account_id: str, max_rounds: int = 5,
+    page: Page, account_id: str,
 ) -> bool:
     """
     在钱包弹窗中点击确认/连接/签名按钮。
-    OKX 钱包连接流程在同一 notification.html 内有多步确认，
-    每轮点击一个按钮后等待页面切换到下一步，持续处理直到没有更多按钮。
+    持续点击直到没有更多按钮或弹窗关闭。
     """
     any_clicked = False
+    round_num = 0
 
-    for round_num in range(max_rounds):
+    while True:
         try:
             if page.is_closed():
                 break
@@ -726,9 +726,6 @@ async def _click_wallet_button(
                         btn = frame.locator(f'button:has-text("{text}")')
                         if await btn.count() > 0:
                             await btn.first.click(timeout=3000)
-                            where = "iframe" if frame != page.main_frame else "主文档"
-                            log(account_id,
-                                f"[第{round_num+1}轮] 在{where}点击 [{text}]")
                             clicked = True
                             break
                     except Exception:
@@ -739,7 +736,6 @@ async def _click_wallet_button(
                     btn = frame.locator('button[type="submit"]')
                     if await btn.count() > 0:
                         await btn.first.click(timeout=3000)
-                        log(account_id, f"[第{round_num+1}轮] 点击 submit 按钮")
                         clicked = True
                         break
                 except Exception:
@@ -765,7 +761,6 @@ async def _click_wallet_button(
                         return false;
                     }""")
                     if js_ok:
-                        log(account_id, f"[第{round_num+1}轮] JS 点击成功")
                         clicked = True
                         break
                 except Exception:
@@ -773,11 +768,15 @@ async def _click_wallet_button(
 
         if clicked:
             any_clicked = True
-            # 等待弹窗切换到下一步（或自动关闭）
+            round_num += 1
+            if round_num <= 3 or round_num % 10 == 0:
+                log(account_id, f"已确认 {round_num} 个弹窗请求")
             await asyncio.sleep(2)
         else:
             break
 
+    if round_num > 3:
+        log(account_id, f"弹窗处理完毕，共确认 {round_num} 个")
     return any_clicked
 
 
