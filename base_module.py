@@ -28,7 +28,7 @@ from playwright.async_api import (
     async_playwright, Browser, BrowserContext, Page, Playwright,
 )
 
-__version__ = "2026.03.22.2"
+__version__ = "2026.03.22.3"
 
 # ════════════════════════════════════════════════════════════
 #  全局配置（可在调用 run_batch 时覆盖）
@@ -905,7 +905,6 @@ async def run_single_account(
     """
     aid = account.id
     if is_account_completed(aid):
-        log(aid, "当前周期已完成，跳过。")
         return
 
     cdp_addr = await asyncio.to_thread(ads.start_browser, aid)
@@ -995,17 +994,20 @@ async def run_batch(
     async with async_playwright() as pw:
 
         async def _run(acc: AccountInfo):
+            if is_account_completed(acc.id):
+                log(acc.id, "当前周期已完成，跳过。")
+                return
             async with sem:
                 if STOP_FLAG:
                     return
                 await run_single_account(pw, ads, acc, task_func, **task_kwargs)
+                await asyncio.sleep(2)
 
         # 第一轮
         log("SYSTEM", f"第一轮：{len(accounts)} 个账号")
         tasks = []
         for acc in accounts:
             tasks.append(asyncio.ensure_future(_run(acc)))
-            await asyncio.sleep(3)
         await asyncio.gather(*tasks, return_exceptions=True)
 
         # 第二轮补跑
@@ -1015,5 +1017,4 @@ async def run_batch(
             tasks = []
             for acc in remaining:
                 tasks.append(asyncio.ensure_future(_run(acc)))
-                await asyncio.sleep(3)
             await asyncio.gather(*tasks, return_exceptions=True)
