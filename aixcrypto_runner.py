@@ -9,7 +9,7 @@ AixCrypto 自动化 — 启动器 + Web 控制台
   5. aixcrypto_runner.py 自身热更新后自动重启
 """
 
-__version__ = "2026.03.22.1"
+__version__ = "2026.03.22.2"
 
 from flask import Flask, render_template
 from flask_socketio import SocketIO, emit
@@ -211,10 +211,11 @@ def try_auto_update():
     LAST_BASE_VERSION = read_local_version(base_path)
     LAST_UPDATE_STATUS = "updated" if updated else "up_to_date"
 
-    # runner 自更新（写到 exe 所在目录，而非 PyInstaller 临时解压目录）
+    # runner 自更新（写到 exe 所在目录）
     if UPDATE_RUNNER_URL and LAST_REMOTE_RUNNER_VERSION:
         runner_path = os.path.join(get_base_dir(), "aixcrypto_runner.py")
-        local_runner_ver = __version__
+        # 优先读本地 .py 文件的版本（避免 EXE 内置版本号导致反复更新）
+        local_runner_ver = read_local_version(runner_path) if os.path.exists(runner_path) else __version__
         if parse_version(LAST_REMOTE_RUNNER_VERSION) > parse_version(local_runner_ver):
             print(f"【更新】runner 发现新版本: {LAST_REMOTE_RUNNER_VERSION}（本地: {local_runner_ver}），下载中...")
             new_code = download_script(UPDATE_RUNNER_URL)
@@ -228,14 +229,19 @@ def try_auto_update():
                     with open(runner_path, "w", encoding="utf-8") as f:
                         f.write(new_code)
                     print(f"【更新】runner 更新成功 → {LAST_REMOTE_RUNNER_VERSION}")
-                    _restart_self()
+                    if not getattr(sys, 'frozen', False):
+                        _restart_self()
+                    else:
+                        print("【更新】runner .py 已更新，EXE 模式下无需重启")
                 except Exception as e:
                     print(f"【更新】runner 写入失败: {e}")
             else:
                 print("【更新】runner 下载失败")
         else:
             print(f"【更新】runner 已是最新: {local_runner_ver}")
-    LAST_RUNNER_VERSION = __version__
+    LAST_RUNNER_VERSION = read_local_version(
+        os.path.join(get_base_dir(), "aixcrypto_runner.py")
+    ) if os.path.exists(os.path.join(get_base_dir(), "aixcrypto_runner.py")) else __version__
 
 
 # ═══════════════════════════════════════════════
