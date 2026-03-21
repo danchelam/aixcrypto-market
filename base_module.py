@@ -28,7 +28,7 @@ from playwright.async_api import (
     async_playwright, Browser, BrowserContext, Page, Playwright,
 )
 
-__version__ = "2026.03.22.9"
+__version__ = "2026.03.22.10"
 
 # ════════════════════════════════════════════════════════════
 #  全局配置（可在调用 run_batch 时覆盖）
@@ -947,24 +947,11 @@ async def run_single_account(
 
         handler = setup_wallet_handler(context, aid)
 
-        # 解锁钱包（期间禁用弹窗处理器避免冲突）
-        handler.enabled = False
-        unlock_target_url = task_kwargs.get("unlock_target_url", "")
-        if not unlock_target_url:
-            unlock_target_url = task_func.__globals__.get("HOME_URL", "")
-        unlock_ok = await unlock_okx_wallet(context, aid, target_url=unlock_target_url)
-        handler.enabled = True
-
-        if not unlock_ok:
-            log(aid, "钱包解锁失败，关闭窗口。")
-            return
-
-        log(aid, "钱包解锁成功")
-
         # 清理残留弹窗
         await drain_existing_popups(context, aid, page)
 
-        # 执行业务
+        # 执行业务（解锁钱包由业务层的 Connect Wallet 流程触发）
+        handler.enabled = False
         success = await task_func(page, context, aid, handler, **task_kwargs)
 
         if STOP_FLAG:
