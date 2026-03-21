@@ -9,7 +9,7 @@ AixCrypto 自动化 — 启动器 + Web 控制台
   5. aixcrypto_runner.py 自身热更新后自动重启
 """
 
-__version__ = "2026.03.22.5"
+__version__ = "2026.03.22.6"
 
 from flask import Flask, render_template
 from flask_socketio import SocketIO, emit
@@ -358,7 +358,9 @@ def run_batch_logic(thread_count):
     log_emitter(f"共加载 {len(accounts)} 个账号，并发数: {thread_count}")
 
     try:
-        home_url = getattr(task_module, "HOME_URL", "")
+        home_url = getattr(task_module, "HOME_URL", "") or ""
+        if home_url:
+            log_emitter(f"解锁目标页: {home_url}")
         asyncio.run(base_module.run_batch(
             accounts,
             task_module.aixcrypto_task,

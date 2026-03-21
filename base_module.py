@@ -28,7 +28,7 @@ from playwright.async_api import (
     async_playwright, Browser, BrowserContext, Page, Playwright,
 )
 
-__version__ = "2026.03.22.5"
+__version__ = "2026.03.22.6"
 
 # ════════════════════════════════════════════════════════════
 #  全局配置（可在调用 run_batch 时覆盖）
@@ -947,7 +947,7 @@ async def run_single_account(
 
         # 解锁钱包（期间禁用弹窗处理器避免冲突）
         handler.enabled = False
-        unlock_target_url = task_kwargs.pop("unlock_target_url", "")
+        unlock_target_url = task_kwargs.get("unlock_target_url", "")
         unlock_ok = await unlock_okx_wallet(context, aid, target_url=unlock_target_url)
         handler.enabled = True
 
