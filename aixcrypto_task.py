@@ -7,7 +7,7 @@ AixCrypto Prediction Market 自动化任务 (Playwright 版本 2.0)
   3. Claim Rewards
 """
 
-__version__ = "2026.03.22.11"
+__version__ = "2026.03.22.12"
 
 import asyncio
 import random
@@ -136,77 +136,89 @@ async def login_if_needed(page: Page, account_id: str) -> bool:
             continue
         await asyncio.sleep(3)
 
-        # ── 检查是否已登录 ──
-        if await check_login_state(page, account_id) == "logged_in":
-            log(account_id, "已是登录状态")
-            return True
-
         # ── 1. 点击 Connect Wallet ──
-        log(account_id, "未登录，点击 Connect Wallet...")
-        try:
-            btn = page.locator("button:has-text('Connect Wallet')").first
-            await btn.click(timeout=8000)
-        except Exception:
+        logged_in = await check_login_state(page, account_id) == "logged_in"
+        clicked_connect = False
+
+        if not logged_in:
+            log(account_id, "未登录，点击 Connect Wallet...")
             try:
-                btn = page.locator("button:has-text('Login')").first
-                await btn.click(timeout=5000)
+                btn = page.locator("button:has-text('Connect Wallet')").first
+                await btn.click(timeout=8000)
+                clicked_connect = True
             except Exception:
-                log(account_id, "未找到 Connect Wallet 按钮")
-                continue
+                try:
+                    btn = page.locator("button:has-text('Login')").first
+                    await btn.click(timeout=5000)
+                    clicked_connect = True
+                except Exception:
+                    log(account_id, "未找到 Connect Wallet 按钮")
+                    continue
 
-        await asyncio.sleep(2)
-        if await check_login_state(page, account_id) == "logged_in":
-            log(account_id, "点击后已自动登录")
-            return True
+            await asyncio.sleep(2)
 
-        # ── 2. Continue with a wallet ──
-        try:
-            cw = page.locator("text=Continue with a wallet").first
-            await cw.click(timeout=5000)
-            log(account_id, "已点击 Continue with a wallet")
-            await asyncio.sleep(1)
-        except Exception:
-            if await check_login_state(page, account_id) == "logged_in":
-                log(account_id, "已登录")
-                return True
-
-        # ── 3. 选择 OKX Wallet ──
-        try:
-            okx = page.locator("text=OKX Wallet").first
-            await okx.click(timeout=8000)
-            log(account_id, "已点击 OKX Wallet")
-        except Exception:
-            if await check_login_state(page, account_id) == "logged_in":
-                log(account_id, "已登录")
-                return True
-            log(account_id, "未找到 OKX Wallet，准备重试...")
-            continue
-
-        # ── 4. 处理钱包弹窗（解锁 + 确认）──
-        await asyncio.sleep(3)
-        popup = await _find_wallet_popup(context)
-        if popup:
-            log(account_id, f"捕获钱包弹窗: {popup.url[-50:]}")
+            # ── 2. Continue with a wallet ──
             try:
-                await _handle_wallet_popup(popup, context, account_id)
-            except Exception as e:
-                log(account_id, f"处理弹窗异常: {e}")
+                cw = page.locator("text=Continue with a wallet").first
+                await cw.click(timeout=5000)
+                log(account_id, "已点击 Continue with a wallet")
+                await asyncio.sleep(1)
+            except Exception:
+                pass
 
-        # ── 5. 等待登录生效 ──
-        for i in range(15):
+            # ── 3. 选择 OKX Wallet ──
+            try:
+                okx = page.locator("text=OKX Wallet").first
+                await okx.click(timeout=8000)
+                log(account_id, "已点击 OKX Wallet")
+            except Exception:
+                pass
+        else:
+            log(account_id, "页面显示已登录，点击 Connect Wallet 触发钱包...")
+            try:
+                btn = page.locator("button:has-text('Connect Wallet')").first
+                await btn.click(timeout=5000)
+                clicked_connect = True
+            except Exception:
+                pass
+
+        # ── 4. 处理钱包弹窗（解锁 + 确认），无论登录状态都要处理 ──
+        await asyncio.sleep(3)
+        handled = False
+        for wait_round in range(8):
+            popup = await _find_wallet_popup(context)
+            if popup:
+                log(account_id, f"捕获钱包弹窗: {popup.url[-50:]}")
+                try:
+                    await _handle_wallet_popup(popup, context, account_id)
+                    handled = True
+                except Exception as e:
+                    log(account_id, f"处理弹窗异常: {e}")
+                break
+            await asyncio.sleep(1)
+
+        if not handled and clicked_connect:
+            log(account_id, "未捕获到钱包弹窗")
+
+        # ── 5. 清理所有残留弹窗 ──
+        await asyncio.sleep(2)
+        for p in context.pages:
+            try:
+                url = p.url or ""
+            except Exception:
+                continue
+            if "chrome-extension://" in url and "offscreen" not in url:
+                try:
+                    await _click_wallet_button(p, account_id)
+                except Exception:
+                    pass
+
+        # ── 6. 等待登录生效 ──
+        for i in range(10):
             await asyncio.sleep(2)
             if page.is_closed():
                 log(account_id, "主页面被关闭")
                 return False
-
-            if i < 5:
-                popup = await _find_wallet_popup(context)
-                if popup:
-                    try:
-                        await _handle_wallet_popup(popup, context, account_id)
-                    except Exception:
-                        pass
-
             if await check_login_state(page, account_id) == "logged_in":
                 log(account_id, "登录成功")
                 return True
