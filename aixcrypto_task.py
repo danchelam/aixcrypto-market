@@ -7,7 +7,7 @@ AixCrypto Prediction Market 自动化任务 (Playwright 版本 2.0)
   3. Claim Rewards
 """
 
-__version__ = "2026.03.22.7"
+__version__ = "2026.03.22.8"
 
 import asyncio
 import random
@@ -76,14 +76,8 @@ async def check_login_state(page: Page, account_id: str) -> str:
 #  前端按钮点击由本模块负责，钱包弹窗确认由 WalletPopupHandler 自动处理
 # ════════════════════════════════════════════════════════
 
-async def login_if_needed(page: Page, account_id: str) -> bool:
-    try:
-        await page.goto(HOME_URL, wait_until="domcontentloaded", timeout=30000)
-    except Exception as e:
-        log(account_id, f"打开首页超时: {e}")
-        return False
-    await asyncio.sleep(3)
-
+async def _try_connect_wallet(page: Page, account_id: str) -> bool:
+    """尝试一次完整的 Connect Wallet → OKX Wallet 流程，成功返回 True"""
     state = await check_login_state(page, account_id)
     if state == "logged_in":
         log(account_id, "已是登录状态")
@@ -130,8 +124,32 @@ async def login_if_needed(page: Page, account_id: str) -> bool:
         if await check_login_state(page, account_id) == "logged_in":
             log(account_id, "未弹出钱包选择，但已处于登录状态")
             return True
-        log(account_id, "未找到 OKX Wallet 选项")
         return False
+
+    return True
+
+
+async def login_if_needed(page: Page, account_id: str) -> bool:
+    for attempt in range(2):
+        try:
+            if attempt == 0:
+                await page.goto(HOME_URL, wait_until="domcontentloaded", timeout=30000)
+            else:
+                log(account_id, "刷新页面重试登录...")
+                await page.reload(wait_until="domcontentloaded", timeout=30000)
+        except Exception as e:
+            log(account_id, f"打开首页超时: {e}")
+            return False
+        await asyncio.sleep(3)
+
+        ok = await _try_connect_wallet(page, account_id)
+        if ok:
+            break
+        if attempt == 0:
+            log(account_id, "首次连接失败，准备刷新重试...")
+        else:
+            log(account_id, "重试后仍未连接成功")
+            return False
 
     # ── 4. 主动搜索钱包弹窗并点击确认 ─────────
     #    不完全依赖异步 WalletPopupHandler（可能因时序问题漏掉弹窗）

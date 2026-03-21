@@ -28,7 +28,7 @@ from playwright.async_api import (
     async_playwright, Browser, BrowserContext, Page, Playwright,
 )
 
-__version__ = "2026.03.22.7"
+__version__ = "2026.03.22.8"
 
 # ════════════════════════════════════════════════════════════
 #  全局配置（可在调用 run_batch 时覆盖）
@@ -492,7 +492,8 @@ async def unlock_okx_wallet(
         await asyncio.sleep(3)
 
     # ── 2. 检查钱包 provider 是否存在 ────────────
-    for attempt in range(3):
+    has_provider = False
+    for attempt in range(8):
         try:
             has_provider = await page.evaluate(
                 "() => !!(window.okxwallet)"
@@ -502,8 +503,9 @@ async def unlock_okx_wallet(
 
         if has_provider:
             break
-        if attempt < 2:
-            log(account_id, f"未检测到钱包 provider，等待重试 ({attempt + 1}/3)...")
+        if attempt < 7:
+            if attempt == 0:
+                log(account_id, "等待钱包 provider 加载...")
             await asyncio.sleep(2)
 
     if not has_provider:
