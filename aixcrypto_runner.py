@@ -9,7 +9,7 @@ AixCrypto 自动化 — 启动器 + Web 控制台
   5. aixcrypto_runner.py 自身热更新后自动重启
 """
 
-__version__ = "2026.03.21.8"
+__version__ = "2026.03.22.1"
 
 from flask import Flask, render_template
 from flask_socketio import SocketIO, emit
@@ -220,10 +220,11 @@ def try_auto_update():
             new_code = download_script(UPDATE_RUNNER_URL)
             if new_code:
                 try:
-                    with open(runner_path, "r", encoding="utf-8") as f:
-                        old = f.read()
-                    with open(runner_path + ".bak", "w", encoding="utf-8") as f:
-                        f.write(old)
+                    if os.path.exists(runner_path):
+                        with open(runner_path, "r", encoding="utf-8") as f:
+                            old = f.read()
+                        with open(runner_path + ".bak", "w", encoding="utf-8") as f:
+                            f.write(old)
                     with open(runner_path, "w", encoding="utf-8") as f:
                         f.write(new_code)
                     print(f"【更新】runner 更新成功 → {LAST_REMOTE_RUNNER_VERSION}")

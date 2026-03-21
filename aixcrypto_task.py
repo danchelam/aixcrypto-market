@@ -7,7 +7,7 @@ AixCrypto Prediction Market 自动化任务 (Playwright 版本 2.0)
   3. Claim Rewards
 """
 
-__version__ = "2026.03.21.8"
+__version__ = "2026.03.22.1"
 
 import asyncio
 import random

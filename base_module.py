@@ -28,7 +28,7 @@ from playwright.async_api import (
     async_playwright, Browser, BrowserContext, Page, Playwright,
 )
 
-__version__ = "2026.03.21.8"
+__version__ = "2026.03.22.1"
 
 # ════════════════════════════════════════════════════════════
 #  全局配置（可在调用 run_batch 时覆盖）
@@ -637,10 +637,10 @@ async def unlock_okx_wallet(
 
         if not found:
             # 没有密码框 → 钱包已解锁，弹窗是 personal_sign 签名确认
-            log(account_id, "无密码框 → 钱包已解锁（关闭签名弹窗）")
+            log(account_id, "无密码框 → 钱包已解锁，拒绝签名请求...")
             try:
                 if wp and not wp.is_closed():
-                    await wp.close()
+                    await _reject_wallet_popup(wp, account_id)
             except Exception:
                 pass
             return True
@@ -662,12 +662,12 @@ async def unlock_okx_wallet(
             log(account_id, "密码框仍在 → 解锁失败（可能密码错误）")
             return False
 
-        # 解锁成功 → 关闭残留的 personal_sign 弹窗
-        log(account_id, "钱包解锁成功，关闭签名弹窗...")
-        await asyncio.sleep(1)
+        # 解锁成功 → 拒绝残留的 personal_sign 签名请求
+        log(account_id, "钱包解锁成功，拒绝签名请求...")
+        await asyncio.sleep(2)
         try:
             if wp and not wp.is_closed():
-                await wp.close()
+                await _reject_wallet_popup(wp, account_id)
         except Exception:
             pass
 
@@ -834,29 +834,33 @@ WALLET_REJECT_KEYWORDS = [
 async def _reject_wallet_popup(page: Page, account_id: str):
     """点击取消/拒绝按钮来正式拒绝钱包请求，而非仅关闭窗口"""
     try:
-        await page.wait_for_load_state("domcontentloaded", timeout=3000)
+        await page.wait_for_load_state("domcontentloaded", timeout=5000)
     except Exception:
         pass
 
     clicked = False
-    for frame in page.frames:
-        for text in WALLET_REJECT_KEYWORDS:
-            try:
-                btn = frame.locator(f'button:has-text("{text}")')
-                if await btn.count() > 0:
-                    await btn.first.click(timeout=3000)
-                    log(account_id, f"拒绝残留弹窗: 点击 [{text}]")
-                    clicked = True
-                    break
-            except Exception:
-                continue
+    for attempt in range(5):
+        for frame in page.frames:
+            for text in WALLET_REJECT_KEYWORDS:
+                try:
+                    btn = frame.locator(f'button:has-text("{text}")')
+                    if await btn.count() > 0:
+                        await btn.first.click(timeout=3000)
+                        log(account_id, f"拒绝弹窗: 点击 [{text}]")
+                        clicked = True
+                        break
+                except Exception:
+                    continue
+            if clicked:
+                break
         if clicked:
             break
+        await asyncio.sleep(1)
 
     if not clicked:
         try:
             await page.close()
-            log(account_id, "残留弹窗未找到拒绝按钮，强制关闭")
+            log(account_id, "弹窗未找到拒绝按钮，强制关闭")
         except Exception:
             pass
 
