@@ -7,7 +7,7 @@ AixCrypto Prediction Market 自动化任务 (Playwright 版本 2.0)
   3. Claim Rewards
 """
 
-__version__ = "2026.03.22.13"
+__version__ = "2026.03.22.14"
 
 import asyncio
 import random
@@ -172,7 +172,8 @@ async def login_if_needed(page: Page, account_id: str) -> bool:
                 await okx.click(timeout=8000)
                 log(account_id, "已点击 OKX Wallet")
             except Exception:
-                pass
+                log(account_id, "未找到 OKX Wallet，刷新重试...")
+                continue
         else:
             log(account_id, "页面显示已登录，点击 Connect Wallet 触发钱包...")
             try:
