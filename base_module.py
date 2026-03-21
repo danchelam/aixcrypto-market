@@ -28,7 +28,7 @@ from playwright.async_api import (
     async_playwright, Browser, BrowserContext, Page, Playwright,
 )
 
-__version__ = "2026.03.21.7"
+__version__ = "2026.03.21.8"
 
 # ════════════════════════════════════════════════════════════
 #  全局配置（可在调用 run_batch 时覆盖）
@@ -826,12 +826,47 @@ def setup_wallet_handler(
     return handler
 
 
+WALLET_REJECT_KEYWORDS = [
+    "取消", "拒绝", "Cancel", "Reject", "Deny",
+]
+
+
+async def _reject_wallet_popup(page: Page, account_id: str):
+    """点击取消/拒绝按钮来正式拒绝钱包请求，而非仅关闭窗口"""
+    try:
+        await page.wait_for_load_state("domcontentloaded", timeout=3000)
+    except Exception:
+        pass
+
+    clicked = False
+    for frame in page.frames:
+        for text in WALLET_REJECT_KEYWORDS:
+            try:
+                btn = frame.locator(f'button:has-text("{text}")')
+                if await btn.count() > 0:
+                    await btn.first.click(timeout=3000)
+                    log(account_id, f"拒绝残留弹窗: 点击 [{text}]")
+                    clicked = True
+                    break
+            except Exception:
+                continue
+        if clicked:
+            break
+
+    if not clicked:
+        try:
+            await page.close()
+            log(account_id, "残留弹窗未找到拒绝按钮，强制关闭")
+        except Exception:
+            pass
+
+
 async def drain_existing_popups(
     context: BrowserContext,
     account_id: str,
     main_page: Page,
 ):
-    """清理连接前就已存在的钱包弹窗"""
+    """清理连接前就已存在的钱包弹窗（点拒绝/取消）"""
     for p in context.pages:
         if p == main_page:
             continue
@@ -841,9 +876,8 @@ async def drain_existing_popups(
             continue
         if "chrome-extension://" not in url:
             continue
-        log(account_id, f"清理残留弹窗: {url[:60]}")
         try:
-            await _click_wallet_button(p, account_id)
+            await _reject_wallet_popup(p, account_id)
         except Exception:
             pass
 
