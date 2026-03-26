@@ -7,7 +7,7 @@ AixCrypto Prediction Market 自动化任务 (Playwright 版本 2.0)
   3. Claim Rewards
 """
 
-__version__ = "2026.03.22.15"
+__version__ = "2026.03.26.1"
 
 import asyncio
 import random
@@ -412,8 +412,30 @@ async def run_prediction_market(
                     seen_success = False
 
                     if not first_click_done:
-                        log(account_id, "首次下注，等待弹窗处理...")
-                        await asyncio.sleep(8)
+                        log(account_id, "首次下注，检查钱包状态...")
+                        await asyncio.sleep(5)
+
+                        # 检查是否弹出了需要解锁的钱包弹窗
+                        for _ck in range(3):
+                            wallet_popup = await _find_wallet_popup(page.context)
+                            if wallet_popup:
+                                has_pwd = False
+                                for frame in wallet_popup.frames:
+                                    try:
+                                        if await frame.locator('input[type="password"]').count() > 0:
+                                            has_pwd = True
+                                            break
+                                    except Exception:
+                                        continue
+                                if has_pwd:
+                                    log(account_id, "钱包未解锁，正在解锁...")
+                                    await _handle_wallet_popup(wallet_popup, page.context, account_id)
+                                    await asyncio.sleep(3)
+                                else:
+                                    await _click_wallet_button(wallet_popup, account_id)
+                                break
+                            await asyncio.sleep(1)
+
                         first_click_done = True
 
                 except Exception as e:
