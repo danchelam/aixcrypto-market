@@ -7,13 +7,14 @@ AixCrypto Prediction Market 自动化任务 (Playwright 版本 2.0)
   3. Claim Rewards
 """
 
-__version__ = "2026.03.26.1"
+__version__ = "2026.04.09.1"
 
 import asyncio
 import random
 import re
 import sys
 import time as _time
+from datetime import datetime, timezone
 from typing import Optional
 
 from playwright.async_api import Page, BrowserContext
@@ -231,269 +232,325 @@ async def login_if_needed(page: Page, account_id: str) -> bool:
 
 
 # ════════════════════════════════════════════════════════
-#  Prediction Market 工具函数
+#  Prediction Market — API 响应拦截（零 DOM 轮询）
+#
+#  前端 JS 自己会定时请求 /api/game/current-round，
+#  我们被动监听这些 HTTP 响应，从 JSON 中读取精确状态，
+#  只在下注瞬间做一次 DOM 按钮点击。
 # ════════════════════════════════════════════════════════
 
-async def get_market_status(page: Page) -> str:
-    """返回 'live' | 'offline' | 'unknown'"""
-    try:
-        if await page.locator("span.text-emerald-400:has-text('Live')").count() > 0:
-            return "live"
-        if await page.locator("span:has-text('Live')").count() > 0:
-            return "live"
-        if await page.locator("span.text-red-400:has-text('Offline')").count() > 0:
-            return "offline"
-        if await page.locator("span:has-text('Offline')").count() > 0:
-            return "offline"
-    except Exception:
-        pass
-    return "unknown"
+class RoundWatcher:
+    """
+    被动监听浏览器自己的 API 网络响应。
+    前端 JS 自己会定时请求 current-round / bet 等接口，
+    我们只"偷听"这些已有的 HTTP 响应，不发任何额外请求。
+    """
 
+    def __init__(self, account_id: str):
+        self.account_id = account_id
+        self.round_data: dict = {}
+        self.bet_result: dict = {}
+        self._round_event = asyncio.Event()
+        self._bet_event = asyncio.Event()
+        self._active = True
+        self.wallet_address = ""
 
-async def get_remaining_clicks(page: Page) -> Optional[int]:
-    """从 'Place Long (94/100)' 提取剩余次数"""
-    values = []
-    for label in ("Place Long", "Place Short"):
-        loc = page.locator(f"xpath=//div[contains(normalize-space(),'{label}')]")
+    async def _on_response(self, response):
+        if not self._active:
+            return
+        url = response.url
         try:
-            cnt = await loc.count()
+            if '/api/game/current-round' in url and response.status == 200:
+                self.round_data = await response.json()
+                if 'address=' in url:
+                    self.wallet_address = url.split('address=')[1].split('&')[0]
+                self._round_event.set()
+            elif '/api/game/bet' in url and response.status == 200:
+                self.bet_result = await response.json()
+                self._bet_event.set()
+        except Exception:
+            pass
+
+    def attach(self, page: Page):
+        page.on('response', self._on_response)
+
+    def detach(self, page: Page):
+        self._active = False
+        try:
+            page.remove_listener('response', self._on_response)
+        except Exception:
+            pass
+
+    async def wait_for_round(self, page: Page, address: str,
+                             timeout: float = 10) -> dict:
+        """
+        等待下一次 current-round 响应。
+        - 如果 sleep 期间已有数据到达 → 立即返回
+        - 超时 → 在页面内执行 fetch 作为 fallback（保持 fingerprint）
+        """
+        if self._round_event.is_set():
+            self._round_event.clear()
+            return self.round_data
+
+        try:
+            await asyncio.wait_for(self._round_event.wait(), timeout=timeout)
+            self._round_event.clear()
+            return self.round_data
+        except asyncio.TimeoutError:
+            addr = address or self.wallet_address
+            data = await _fetch_round_in_page(page, addr)
+            if data and data.get('round'):
+                self.round_data = data
+            return self.round_data
+
+    async def wait_for_bet(self, timeout: float = 10) -> bool:
+        """等待下注 API 响应，返回是否成功"""
+        self._bet_event.clear()
+        try:
+            await asyncio.wait_for(self._bet_event.wait(), timeout=timeout)
+            return self.bet_result.get('success', False)
+        except asyncio.TimeoutError:
+            return False
+
+
+def _parse_utc(s: str) -> Optional[float]:
+    """ISO 时间字符串 → Unix 时间戳（秒）"""
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace('Z', '+00:00')).timestamp()
+    except Exception:
+        return None
+
+
+async def _get_wallet_address(page: Page) -> str:
+    """从页面钱包 provider 或 DOM 获取当前地址"""
+    try:
+        return await page.evaluate("""() => {
+            try {
+                if (window.okxwallet && window.okxwallet.selectedAddress)
+                    return window.okxwallet.selectedAddress;
+            } catch(e) {}
+            try {
+                for (const s of document.querySelectorAll('span')) {
+                    const t = (s.textContent || '').trim();
+                    if (/^0x[0-9a-fA-F]{6,}/.test(t)) return t;
+                }
+            } catch(e) {}
+            return '';
+        }""") or ""
+    except Exception:
+        return ""
+
+
+async def _fetch_round_in_page(page: Page, address: str) -> dict:
+    """
+    Fallback: 在浏览器内调用 fetch 获取回合数据。
+    请求从浏览器发出 → 自动携带 cookies / fingerprint / proxy。
+    """
+    try:
+        qs = f'?address={address}' if address else ''
+        return await page.evaluate("""async (qs) => {
+            try {
+                const r = await fetch('/api/game/current-round' + qs);
+                if (!r.ok) return {};
+                return await r.json();
+            } catch(e) { return {}; }
+        }""", qs)
+    except Exception:
+        return {}
+
+
+async def _click_bet_button(page: Page, choice: str, account_id: str) -> bool:
+    """点击 Place Long / Place Short 按钮"""
+    btn = None
+    for sel in (
+        f'div.rounded-lg.py-3:has-text("Place {choice}")',
+        f'div.rounded-lg:has-text("Place {choice}")',
+        f'text=Place {choice}',
+    ):
+        loc = page.locator(sel)
+        try:
+            if await loc.count() > 0:
+                btn = loc.last
+                break
         except Exception:
             continue
-        for i in range(cnt):
-            try:
-                text = await loc.nth(i).inner_text(timeout=1000)
-                m = re.search(r"\((\d+)\s*/\s*\d+\)", text)
-                if m:
-                    values.append(int(m.group(1)))
-            except Exception:
-                pass
-    return min(values) if values else None
-
-
-async def is_countdown_state(page: Page) -> bool:
-    """'100 chances in 06:30:15' 表示今日次数已用完"""
+    if not btn:
+        btn = page.locator(
+            f"xpath=//div[contains(normalize-space(),'Place {choice}')]"
+        ).last
     try:
-        return (
-            await page.locator(
-                "xpath=//div[contains(normalize-space(),'chances in')]"
-            ).count()
-            > 0
-        )
-    except Exception:
+        await btn.click(timeout=4000)
+        return True
+    except Exception as e:
+        log(account_id, f"点击 Place {choice} 失败: {e}")
         return False
 
 
-async def wait_until_live(page: Page, account_id: str) -> bool:
-    log(account_id, "市场 Offline，等待恢复...")
-    last_refresh = 0.0
-    while not STOP_FLAG:
-        status = await get_market_status(page)
-        if status == "live":
-            log(account_id, "市场恢复 Live")
-            return True
-        now = _time.time()
-        if now - last_refresh >= 30:
-            try:
-                await page.reload(wait_until="domcontentloaded", timeout=15000)
-            except Exception:
-                pass
-            last_refresh = now
+async def _handle_first_bet_wallet(
+    page: Page, context: BrowserContext, account_id: str,
+):
+    """首次下注后检查是否弹出钱包解锁弹窗"""
+    log(account_id, "首次下注，检查钱包状态...")
+    await asyncio.sleep(5)
+    for _ in range(3):
+        wallet_popup = await _find_wallet_popup(context)
+        if wallet_popup:
+            has_pwd = False
+            for frame in wallet_popup.frames:
+                try:
+                    if await frame.locator('input[type="password"]').count() > 0:
+                        has_pwd = True
+                        break
+                except Exception:
+                    continue
+            if has_pwd:
+                log(account_id, "钱包未解锁，正在解锁...")
+                await _handle_wallet_popup(wallet_popup, context, account_id)
+                await asyncio.sleep(3)
+            else:
+                await _click_wallet_button(wallet_popup, account_id)
+            break
         await asyncio.sleep(1)
-    return False
 
 
 # ════════════════════════════════════════════════════════
-#  Prediction Market 主循环
+#  Prediction Market 主循环 — API 响应拦截版
 # ════════════════════════════════════════════════════════
 
 async def run_prediction_market(
-    page: Page, account_id: str, max_timeout: int = 360,
+    page: Page, account_id: str, max_timeout: int = 600,
 ) -> bool:
+    """
+    Prediction Market 下注循环。
+
+    原理：
+    1. 前端 JS 自己会定时请求 /api/game/current-round
+    2. 我们用 page.on('response') 被动监听这些响应
+    3. 从 JSON 中读取 phase / dailyBetRemaining / settleTime
+    4. 只在 BETTING 阶段做一次按钮点击
+    5. 用 settleTime 精确计算 sleep → 零轮询
+    """
     try:
         await page.goto(MARKET_URL, wait_until="domcontentloaded", timeout=30000)
     except Exception as e:
         log(account_id, f"打开 Market 超时: {e}")
         return False
-    await asyncio.sleep(2)
+    await asyncio.sleep(3)
     log(account_id, "进入 Prediction Market")
 
+    watcher = RoundWatcher(account_id)
+    watcher.attach(page)
+
+    wallet_addr = await _get_wallet_address(page)
+    if wallet_addr:
+        log(account_id, f"钱包地址: {wallet_addr[:8]}...{wallet_addr[-4:]}")
+
     last_progress = _time.time()
-    stage = "wait_open"
-    stage_start = _time.time()
-    none_count = 0
-    prev_remaining: Optional[int] = None
-    seen_success = False
+    last_bet_round_id = None
     first_click_done = False
+    consecutive_empty = 0
 
-    while not STOP_FLAG:
-        # 总超时保护
-        if _time.time() - last_progress > max_timeout:
-            log(account_id, f"超时 ({max_timeout}s)，结束。")
-            return False
-
-        # 市场状态
-        status = await get_market_status(page)
-        if status == "offline":
-            if not await wait_until_live(page, account_id):
+    try:
+        while not STOP_FLAG:
+            if _time.time() - last_progress > max_timeout:
+                log(account_id, f"超时 ({max_timeout}s)，结束。")
                 return False
-            last_progress = _time.time()
-            stage = "wait_open"
-            stage_start = _time.time()
-            continue
 
-        # 倒计时 → 今日用完
-        if await is_countdown_state(page):
-            log(account_id, "倒计时，结束。")
-            return True
+            # ── 1. 等待回合数据（被动监听 + 超时 fallback）──
+            data = await watcher.wait_for_round(page, wallet_addr, timeout=10)
 
-        # 剩余次数
-        remaining = await get_remaining_clicks(page)
-        if remaining is None:
-            none_count += 1
-            if none_count >= 120:
-                log(account_id, "长时间无法读取剩余次数，结束。")
-                return False
-            await asyncio.sleep(0.15)
-            continue
-        none_count = 0
-        if remaining <= 0:
-            log(account_id, "剩余次数 0，结束。")
-            return True
-
-        # 页面状态
-        placing_open = await page.locator("text=Placing Open").count() > 0
-        success = await page.locator("text=Place Success!").count() > 0
-        won = (
-            await page.locator(
-                "xpath=//*[contains(normalize-space(),'You Won')]"
-            ).count()
-            > 0
-        )
-        lost = (
-            await page.locator(
-                "xpath=//*[contains(normalize-space(),'You Lost')]"
-            ).count()
-            > 0
-        )
-
-        # ─── 等待开盘 → 下注 ─────────────────────
-        if stage == "wait_open":
-            if status == "live" and placing_open:
-                choice = random.choice(["Long", "Short"])
-
-                # 精确匹配实际可点击按钮（Tailwind class 的 div）
-                btn = None
-                for sel in (
-                    f'div.rounded-lg.py-3:has-text("Place {choice}")',
-                    f'div.rounded-lg:has-text("Place {choice}")',
-                    f'text=Place {choice}',
-                ):
-                    loc = page.locator(sel)
+            if not data or not data.get('round'):
+                consecutive_empty += 1
+                if consecutive_empty >= 6:
+                    log(account_id, "持续无法获取数据，刷新页面...")
                     try:
-                        c = await loc.count()
-                        if c > 0:
-                            btn = loc.last  # .last 取最内层匹配
-                            break
+                        await page.reload(
+                            wait_until="domcontentloaded", timeout=15000,
+                        )
                     except Exception:
-                        continue
+                        pass
+                    await asyncio.sleep(3)
+                    consecutive_empty = 0
+                continue
+            consecutive_empty = 0
 
-                if not btn:
-                    btn = page.locator(
-                        f"xpath=//div[contains(normalize-space(),'Place {choice}')]"
-                    ).last
+            # ── 2. 市场离线 ──
+            if not data.get('hasActiveRound'):
+                log(account_id, "市场 Offline，等待恢复...")
+                await asyncio.sleep(10)
+                last_progress = _time.time()
+                continue
 
-                try:
-                    await btn.click(timeout=4000)
-                    log(account_id, f"Place {choice}（剩余 {remaining}）")
+            round_info = data.get('round', {})
+            remaining = data.get('dailyBetRemaining')
+            phase = round_info.get('phase', '')
+            round_id = round_info.get('id')
+
+            if PERF_DEBUG:
+                perf_log(
+                    account_id,
+                    f"phase={phase} round={round_id} remain={remaining}",
+                )
+
+            # ── 3. 次数用完 ──
+            if remaining is not None and remaining <= 0:
+                log(account_id, "剩余次数 0，结束。")
+                return True
+
+            # ── 4. BETTING 阶段 + 本轮未下注 → 下注 ──
+            if phase == 'BETTING' and round_id != last_bet_round_id:
+                bet_end_ts = _parse_utc(round_info.get('betEndTime', ''))
+                now_ts = _time.time()
+                time_left = (bet_end_ts - now_ts) if bet_end_ts else 3.0
+
+                if time_left < 0.5:
+                    continue
+
+                await asyncio.sleep(random.uniform(0.3, min(1.5, time_left - 0.5)))
+
+                choice = random.choice(["Long", "Short"])
+                clicked = await _click_bet_button(page, choice, account_id)
+
+                if clicked:
+                    log(account_id,
+                        f"Place {choice}（剩余 {remaining}）round#{round_id}")
+                    last_bet_round_id = round_id
                     last_progress = _time.time()
-                    stage = "wait_result"
-                    stage_start = _time.time()
-                    prev_remaining = remaining
-                    seen_success = False
 
                     if not first_click_done:
-                        log(account_id, "首次下注，检查钱包状态...")
-                        await asyncio.sleep(5)
-
-                        # 检查是否弹出了需要解锁的钱包弹窗
-                        for _ck in range(3):
-                            wallet_popup = await _find_wallet_popup(page.context)
-                            if wallet_popup:
-                                has_pwd = False
-                                for frame in wallet_popup.frames:
-                                    try:
-                                        if await frame.locator('input[type="password"]').count() > 0:
-                                            has_pwd = True
-                                            break
-                                    except Exception:
-                                        continue
-                                if has_pwd:
-                                    log(account_id, "钱包未解锁，正在解锁...")
-                                    await _handle_wallet_popup(wallet_popup, page.context, account_id)
-                                    await asyncio.sleep(3)
-                                else:
-                                    await _click_wallet_button(wallet_popup, account_id)
-                                break
-                            await asyncio.sleep(1)
-
+                        await _handle_first_bet_wallet(
+                            page, page.context, account_id,
+                        )
                         first_click_done = True
+                    else:
+                        bet_ok = await watcher.wait_for_bet(timeout=10)
+                        if bet_ok:
+                            bet_rem = (
+                                watcher.bet_result.get('dailyBetLimit', 10)
+                                - watcher.bet_result.get('dailyBetCount', 0)
+                            )
+                            log(account_id, f"下注确认成功！剩余 {bet_rem}")
+                            last_progress = _time.time()
+                            if bet_rem <= 0:
+                                log(account_id, "次数用完，结束。")
+                                return True
+                        else:
+                            log(account_id, "等待下注确认超时")
 
-                except Exception as e:
-                    log(account_id, f"点击下注按钮失败: {e}")
+                # 精确 sleep 到结算时间，避免无意义轮询
+                settle_ts = _parse_utc(round_info.get('settleTime', ''))
+                if settle_ts:
+                    sleep_s = max(0, settle_ts - _time.time() + 1)
+                    await asyncio.sleep(min(sleep_s, 15))
+                else:
+                    await asyncio.sleep(5)
 
-        # ─── 等待结果 ────────────────────────────
-        elif stage == "wait_result":
-            if success and not seen_success:
-                seen_success = True
-                log(account_id, "Place Success!")
-                last_progress = _time.time()
+            # ── 5. 非 BETTING 或已下注 → 自动回到顶部等下一条数据 ──
 
-            if won or lost:
-                log(account_id, f"结果: {'You Won!' if won else 'You Lost'}")
-                last_progress = _time.time()
-                stage = "wait_open"
-                stage_start = _time.time()
-                prev_remaining = None
-                seen_success = False
-                continue
-
-            if prev_remaining is not None and remaining < prev_remaining:
-                log(
-                    account_id,
-                    f"次数下降 {prev_remaining}→{remaining}，本轮完成。",
-                )
-                last_progress = _time.time()
-                stage = "wait_open"
-                stage_start = _time.time()
-                prev_remaining = None
-                seen_success = False
-                continue
-
-            if placing_open and _time.time() - stage_start > 4:
-                log(account_id, "已重新开盘，本轮结束。")
-                last_progress = _time.time()
-                stage = "wait_open"
-                stage_start = _time.time()
-                prev_remaining = None
-                seen_success = False
-                continue
-
-            if _time.time() - stage_start > 40:
-                log(account_id, "等待结果超时，重置。")
-                stage = "wait_open"
-                stage_start = _time.time()
-                prev_remaining = None
-                seen_success = False
-                continue
-
-        if PERF_DEBUG:
-            perf_log(
-                account_id,
-                f"stage={stage} market={status} remain={remaining} "
-                f"open={placing_open} success={success} won={won} lost={lost}",
-            )
-
-        await asyncio.sleep(0.15)
+    finally:
+        watcher.detach(page)
 
     return False
 

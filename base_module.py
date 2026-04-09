@@ -28,7 +28,7 @@ from playwright.async_api import (
     async_playwright, Browser, BrowserContext, Page, Playwright,
 )
 
-__version__ = "2026.03.26.1"
+__version__ = "2026.04.09.1"
 
 # ════════════════════════════════════════════════════════════
 #  全局配置（可在调用 run_batch 时覆盖）
@@ -40,7 +40,7 @@ OKX_EXTENSION_ID = "mcohilncbfahbmgdjkbpemcciiolgcge"
 OKX_DEFAULT_PASSWORD = "DD112211"
 
 STOP_FLAG = False
-PERF_DEBUG = os.environ.get("PERF_DEBUG", "1").strip().lower() in (
+PERF_DEBUG = os.environ.get("PERF_DEBUG", "0").strip().lower() in (
     "1", "true", "yes", "on",
 )
 
